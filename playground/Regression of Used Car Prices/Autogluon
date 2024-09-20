@@ -1,0 +1,110 @@
+# 01. Setting
+# ===============================================================================
+import warnings
+warnings.filterwarnings("ignore")
+
+import pandas as pd
+import numpy as np
+import re
+import os
+import random
+
+from sklearn.model_selection import train_test_split
+from autogluon.tabular import TabularDataset, TabularPredictor
+
+seed = 42
+def seed_everything(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    
+seed_everything(seed)
+# ===============================================================================
+
+
+# 02. Data Load & Processing
+# ===============================================================================
+train      = pd.read_csv('/kaggle/input/playground-series-s4e9/train.csv')
+test       = pd.read_csv('/kaggle/input/playground-series-s4e9/test.csv')
+Original   = pd.read_csv('/kaggle/input/used-car-price-prediction-dataset/used_cars.csv')
+sample_sub = pd.read_csv('/kaggle/input/playground-series-s4e9/sample_submission.csv')
+
+train.drop(columns=['id'], inplace=True)
+train.head()
+
+test.drop(columns=['id'], inplace=True)
+test.head()
+
+# Original Data: milage & price value → integer value
+Original[['milage', 'price']] = Original[['milage', 'price']].map(lambda x: int(''.join(re.findall(r'\d+', x))))
+Original.head()
+
+train = pd.concat([train, Original], ignore_index=True)
+
+train_df = TabularDataset(train)
+test_df  = TabularDataset(test)
+# ===============================================================================
+
+
+# 03. Autogluon Model-1
+# ===============================================================================
+# [Train] AutoGluon Model
+save_path = '/kaggle/working/AutogluonModels/mae_360000'
+predictor = TabularPredictor(
+    label = 'price',
+    path  = save_path,
+    eval_metric = 'mean_absolute_error'
+    ).fit(
+        train_data = train_df, 
+        presets    = 'best_quality',
+        time_limit = 360000
+        )
+
+# [Generate] Prediction value
+pred = predictor.predict(test_data)
+
+# [Store] Prediction value in sample_sub
+sample_sub['price'] = pred
+
+# [Save] the results as a CSV file. 
+sample_sub.to_csv('/kaggle/working/submissions/autogluon_mae_360000.csv', index=False)
+# ===============================================================================
+
+
+# 03. Autogluon Model-2
+# ===============================================================================
+# [Train] AutoGluon Model
+save_path = '/kaggle/working/AutogluonModels/mae'
+predictor = TabularPredictor(
+    label = 'price',
+    path  = save_path,
+    eval_metric = 'mean_absolute_error'
+    ).fit(
+        train_data = train_df, 
+        presets    = 'best_quality',
+        )
+        
+# [Generate] Prediction value
+pred = predictor.predict(test_data)
+
+# [Store] Prediction value in sample_sub
+sample_sub['price'] = pred
+
+# [Save] the results as a CSV file. 
+sample_sub.to_csv('/kaggle/working/submissions/autogluon_mae.csv', index=False)
+# ===============================================================================
+
+
+# 04. Average Ensemble
+# ===============================================================================
+df1 = pd.read_csv('submissions/autogluon_mae.csv')
+df2 = pd.read_csv('submissions/autogluon_mae_360000.csv')
+ensembled = (df1['price'] + df2['price']) / 2
+
+# [Store] Prediction value in sample_sub
+sample_sub['price'] = ensembled
+
+# [Save] the results as a CSV file. 
+sample_sub.to_csv("submission.csv", index=False)
+sample_sub.head()
+# ===============================================================================

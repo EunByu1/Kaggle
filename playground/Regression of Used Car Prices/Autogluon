@@ -46,66 +46,242 @@ test_df  = TabularDataset(test)
 # ===============================================================================
 
 
-# 03. Autogluon Model-1
+# 03. Several feature engineer step taken by fellow kagglers, explanation comes for the diverse public notebook of the competition¶
 # ===============================================================================
-# [Train] AutoGluon Model
-save_path = '/kaggle/working/AutogluonModels/mae_36000'
-predictor = TabularPredictor(
-    label = 'price',
-    path  = save_path,
-    eval_metric = 'mean_absolute_error'
-    ).fit(
-        train_data = train_df, 
-        presets    = 'best_quality',
-        time_limit = 36000
-        )
+def extract_age_features(df):
+    current_year = 2024
 
-# [Generate] Prediction value
-pred = predictor.predict(test_data)
-
-# [Store] Prediction value in sample_sub
-sample_sub['price'] = pred
-
-# [Save] the results as a CSV file. 
-sample_sub.to_csv('/kaggle/working/submissions/autogluon_mae_36000.csv', index=False)
-# ===============================================================================
+    df['Vehicle_Age'] = current_year - df['model_year']
+    
+    df['Mileage_per_Year'] = df['milage'] / df['Vehicle_Age']
+    df['milage_with_age'] =  df.groupby('Vehicle_Age')['milage'].transform('mean')
+    
+    df['Mileage_per_Year_with_age'] =  df.groupby('Vehicle_Age')['Mileage_per_Year'].transform('mean')
+    
+    return df
 
 
-# 03. Autogluon Model-2
-# ===============================================================================
-# [Train] AutoGluon Model
-save_path = '/kaggle/working/AutogluonModels/rmse_21600'
-predictor = TabularPredictor(
-    label = 'price',
-    path  = save_path,
-    eval_metric = 'root_mean_squared_error'
-    ).fit(
-        train_data = train_df, 
-        presets    = 'best_quality',
-        time_limit = 21600  # 3600 * 6
-        )
+def extract_other_features(df):
+    
+    luxury_brands =  ['Mercedes-Benz', 'BMW', 'Audi', 'Porsche', 'Land', 
+                    'Lexus', 'Jaguar', 'Bentley', 'Maserati', 'Lamborghini', 
+                    'Rolls-Royce', 'Ferrari', 'McLaren', 'Aston', 'Maybach']
+    df['Is_Luxury_Brand'] = df['brand'].apply(lambda x: 1 if x in luxury_brands else 0)
+    
+
+
+
+    return df
+
+train = extract_age_features(train)
+test = extract_age_features(test)
+
+train = extract_other_features(train)
+test = extract_other_features(test)
+
+def update(df):
+    
+    t = 100
+    
+    cat_c = ['brand','model','fuel_type','engine','transmission','ext_col','int_col','accident','clean_title',
+             
+            ]
+    re_ = ['model','engine','transmission','ext_col','int_col']
+    
+    for col in re_:
+        df.loc[df[col].value_counts(dropna=False)[df[col]].values < t, col] = "noise"
         
+    for col in cat_c:
+        df[col] = df[col].fillna('missing')
+        df[col] = df[col].astype('category')
+        
+    return df
+
+train  = update(train)
+test   = update(test)
+
+X = train.drop('price', axis=1)
+y = train['price']
+
+import lightgbm as lgb
+from lightgbm import log_evaluation, early_stopping
+from catboost import CatBoostRegressor, Pool
+from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import KFold
+
+
+callbacks = [log_evaluation(period=300), early_stopping(stopping_rounds=200)]
+cat_cols  = train.select_dtypes(include=['object', 'category']).columns.tolist()
+print(f"cat_cols--------{cat_cols}")
+
+
+def get_MAE_oof(df, target, lgb_params, cat_params=None, model_type='LGBM'):
+    oof_predictions = np.zeros(len(df))
+    kf = KFold(n_splits=5, shuffle=True, random_state=1)
+    models = []
+    rmse_scores = []
+    
+    for fold, (train_idx, val_idx) in enumerate(kf.split(df)):
+        print(f"Training fold {fold + 1}/{5} with {model_type}")
+
+        X_train, X_val = df.iloc[train_idx], df.iloc[val_idx]
+        y_train, y_val = target.iloc[train_idx], target.iloc[val_idx]
+
+        if model_type == 'LGBM':
+            train_data = lgb.Dataset(X_train, label=y_train)
+            val_data = lgb.Dataset(X_val, label=y_val, reference=train_data)
+            
+            model = lgb.train(
+                lgb_params,
+                train_data,
+                valid_sets=[train_data, val_data],
+                valid_names=['train', 'valid'],
+                callbacks=callbacks    
+            )
+        
+        elif model_type == 'CAT':
+            train_data = Pool(data=X_train, label=y_train , cat_features=cat_cols)
+            val_data = Pool(data=X_val, label=y_val , cat_features=cat_cols )
+            
+            model = CatBoostRegressor(**cat_params)
+            model.fit(train_data, eval_set=val_data, verbose=150, early_stopping_rounds=200)
+        
+        models.append(model)
+        
+        if model_type == 'LGBM':
+            pred = model.predict(X_val, num_iteration=model.best_iteration)
+        elif model_type == 'CAT':
+            pred = model.predict(X_val)
+        
+        rmse = np.sqrt(mean_squared_error(y_val, pred))
+        rmse_scores.append(rmse)
+
+        print(f'{model_type} Fold RMSE: {rmse}')
+        
+        oof_predictions[val_idx] = pred
+        
+    print(f'Mean RMSE: {np.mean(rmse_scores)}')
+    return oof_predictions, models
+
+
+lgb_params = {
+    'objective': 'MAE',
+    'n_estimators': 1000,
+    'random_state': 1,
+}
+
+oof_predictions_lgbm, models_lgbm = get_MAE_oof(X, y, lgb_params, model_type='LGBM')
+X['LGBM_MAE'] = oof_predictions_lgbm
+
+
+LGBM_preds = np.zeros(len(test))
+for model in models_lgbm:
+    LGBM_preds += model.predict(test) / len(models_lgbm)
+test['LGBM_MAE'] = LGBM_preds
+
+
+
+lgb_params = {
+    'objective': 'MSE',
+    'n_estimators': 1000,
+    'random_state': 1,
+}
+
+oof_predictions_lgbm, models_lgbm = get_MAE_oof(X, y, lgb_params, model_type='LGBM')
+
+X['LGBM_MSE_diff'] = oof_predictions_lgbm - X['LGBM_MAE']
+
+
+LGBM_preds = np.zeros(len(test))
+for model in models_lgbm:
+    LGBM_preds += model.predict(test) / len(models_lgbm)
+test['LGBM_MSE_diff'] = LGBM_preds - test['LGBM_MAE']
+
+test.head()
+
+X['price'] = y
+# ===============================================================================
+
+
+# 04. Autogluon Model-1
+# ===============================================================================
+# [Train] AutoGluon Model
+
+save_path = '/kaggle/working/AutogluonModels/rmse_3600_3'
+predictor = TabularPredictor(
+    label = 'price',
+    path  = save_path,
+    eval_metric = 'root_mean_squared_error',
+    problem_type= 'regression'
+    ).fit(
+        train_data = X, 
+        presets    = 'best_quality',
+        time_limit = 3600*3,
+        verbosity  = 2,
+        num_gpus   = 0,
+        included_model_types = ['GBM', 'CAT']
+        )
+
 # [Generate] Prediction value
-pred = predictor.predict(test_data)
+pred = predictor.predict(test)
+
+# [Store] Prediction value in sample_sub
+sample_sub['price'] = pred
+
+import os
+
+save_directory = '/kaggle/working/submissions'
+os.makedirs(save_directory, exist_ok=True)  
+
+# [Save] the results as a CSV file. 
+sample_sub.to_csv(os.path.join(save_directory, 'autogluon_rmse_3600_3.csv'), index=False)
+# ===============================================================================
+
+
+# 04. Autogluon Model-2
+# ===============================================================================
+# [Train] AutoGluon Model
+
+save_path = '/kaggle/working/AutogluonModels/rmse_3600_4'
+predictor = TabularPredictor(
+    label = 'price',
+    path  = save_path,
+    eval_metric = 'root_mean_squared_error',
+    problem_type= 'regression'
+    ).fit(
+        train_data = X, 
+        presets    = 'best_quality',
+        time_limit = 3600*4,
+        verbosity  = 2,
+        num_gpus   = 0,
+        included_model_types = ['GBM', 'CAT']
+        )
+
+# [Generate] Prediction value
+pred = predictor.predict(test)
 
 # [Store] Prediction value in sample_sub
 sample_sub['price'] = pred
 
 # [Save] the results as a CSV file. 
-sample_sub.to_csv('/kaggle/working/submissions/autogluon_rmse_21600.csv', index=False)
+sample_sub.to_csv(os.path.join(save_directory, 'autogluon_rmse_3600_4.csv'), index=False)
 # ===============================================================================
 
 
-# 04. Average Ensemble
+# 05. Average Ensemble
 # ===============================================================================
-df1 = pd.read_csv('submissions/autogluon_rmse_36000.csv')
-df2 = pd.read_csv('submissions/autogluon_rmse_21600.csv')
-ensembled = (df1['price'] + df2['price']) / 2
+blended_sub = pd.read_csv('/kaggle/input/top-5-blended-car-prices/submission_9.csv')
+
+df1 = pd.read_csv('/kaggle/working/submissions/autogluon_rmse_3600_3.csv')
+df2 = pd.read_csv('/kaggle/working/submissions/autogluon_rmse_3600_4.csv')
+
+ensembled = ((df1['price'] * 0.3 + blended_sub['price'] * 0.7) + (df2['price'] * 0.7 + blended_sub['price'] * 0.3)) / 2
 
 # [Store] Prediction value in sample_sub
 sample_sub['price'] = ensembled
 
 # [Save] the results as a CSV file. 
 sample_sub.to_csv("submission.csv", index=False)
+
 sample_sub.head()
 # ===============================================================================

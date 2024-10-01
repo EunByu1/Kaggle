@@ -207,7 +207,7 @@ X['price'] = y
 # ===============================================================================
 # [Train] AutoGluon Model
 
-save_path = '/kaggle/working/AutogluonModels/rmse_3600_3'
+save_path = '/kaggle/working/AutogluonModels/rmse_3600_1'
 predictor = TabularPredictor(
     label = 'price',
     path  = save_path,
@@ -216,7 +216,7 @@ predictor = TabularPredictor(
     ).fit(
         train_data = X, 
         presets    = 'best_quality',
-        time_limit = 3600*3,
+        time_limit = 3600*1,
         verbosity  = 2,
         num_gpus   = 0,
         included_model_types = ['GBM', 'CAT']
@@ -234,7 +234,7 @@ save_directory = '/kaggle/working/submissions'
 os.makedirs(save_directory, exist_ok=True)  
 
 # [Save] the results as a CSV file. 
-sample_sub.to_csv(os.path.join(save_directory, 'autogluon_rmse_3600_3.csv'), index=False)
+sample_sub.to_csv(os.path.join(save_directory, 'autogluon_rmse_3600_1.csv'), index=False)
 # ===============================================================================
 
 
@@ -242,7 +242,7 @@ sample_sub.to_csv(os.path.join(save_directory, 'autogluon_rmse_3600_3.csv'), ind
 # ===============================================================================
 # [Train] AutoGluon Model
 
-save_path = '/kaggle/working/AutogluonModels/rmse_3600_4'
+save_path = '/kaggle/working/AutogluonModels/rmse_3600_2'
 predictor = TabularPredictor(
     label = 'price',
     path  = save_path,
@@ -251,7 +251,7 @@ predictor = TabularPredictor(
     ).fit(
         train_data = X, 
         presets    = 'best_quality',
-        time_limit = 3600*4,
+        time_limit = 3600*2,
         verbosity  = 2,
         num_gpus   = 0,
         included_model_types = ['GBM', 'CAT']
@@ -264,7 +264,7 @@ pred = predictor.predict(test)
 sample_sub['price'] = pred
 
 # [Save] the results as a CSV file. 
-sample_sub.to_csv(os.path.join(save_directory, 'autogluon_rmse_3600_4.csv'), index=False)
+sample_sub.to_csv(os.path.join(save_directory, 'autogluon_rmse_3600_2.csv'), index=False)
 # ===============================================================================
 
 
@@ -272,8 +272,8 @@ sample_sub.to_csv(os.path.join(save_directory, 'autogluon_rmse_3600_4.csv'), ind
 # ===============================================================================
 blended_sub = pd.read_csv('/kaggle/input/top-5-blended-car-prices/submission_9.csv')
 
-df1 = pd.read_csv('/kaggle/working/submissions/autogluon_rmse_3600_3.csv')
-df2 = pd.read_csv('/kaggle/working/submissions/autogluon_rmse_3600_4.csv')
+df1 = pd.read_csv('/kaggle/working/submissions/autogluon_rmse_3600_1.csv')
+df2 = pd.read_csv('/kaggle/working/submissions/autogluon_rmse_3600_2.csv')
 
 ensembled = ((df1['price'] * 0.3 + blended_sub['price'] * 0.7) + (df2['price'] * 0.7 + blended_sub['price'] * 0.3)) / 2
 
